@@ -9,14 +9,14 @@ Variance declaration:
   B := `<=` | `>=` | `=`
 
 Types:
-  beta := `TOP` | `BOT` | n |  e.t
+  beta := `⊤` | `⊥` | n |  e.t
     (base types)
-  tau := beta r
+  τ := beta r
   e := x | ...
 
 
 Type members:
-  member := `type` t B tau
+  member := `type` t B τ
 
 Anonymous refinements:
   r := { member... }
@@ -30,133 +30,179 @@ Subtyping declarations:
 
 # Helpers
 
-## Coerce
-Left or right hand side of subtyping relation:
-```
-  hand := `LHS` | `RHS`
-```
+## Exposure
+Nieto 2017
 
-Coercion interprets a member as a type. This isn't as simple as it looks, because it depends what side of the subtyping relation you're looking at.
-For example, a relation with variant on left and contravariant on right should not hold: `type t >= tau \not<: type t <= tau`.
-To achieve this, a constraint `type t <= tau` is interpreted as `tau` on the left-hand side, but on the right-hand side it reads as bottom.
-This up-casting of the left-hand-side to top, and down-casting the right-hand-side to bottom, is comparable to the Uc-Top and Dc-Bot rules in kernel `D<:`.
+Exposure simplifies a path-dependent type to a non-path supertype.
+Exposure `Γ ⊢ τ ↑ τ'` (up-arrow should be fat-arrow).
+
+Interesting cases are paths:
 
 ```
-  coerce : member -> hand -> tau
-  -- Invariant members
-  coerce (type t  = tau) _   = tau
+Γ           ⊢   τ ↑ β { ...;type t <=/= τ';... }      Γ ⊢   τ' ↑ τ''
+------------------------------------------------------------------ (XPathRefine)
+Γ, x: τ, Γ' ⊢ x.t ↑ τ''
 
-  -- Variant members
-  coerce (type t <= tau) LHS = tau
-  coerce (type t <= tau) RHS = BOT
+Γ           ⊢   τ ↑ x'.t' r          t ∉ r          Γ ⊢ x'.t' ↑ τ'    Γ, x: τ' ⊢ x.t ↑ τ''
+------------------------------------------------------------------------------- (XPathNotIn)
+Γ, x: τ, Γ' ⊢ x.t ↑ τ''
 
-  -- Contravariant members
-  coerce (type t >= tau) LHS = TOP
-  coerce (type t >= tau) RHS = tau
+Γ           ⊢   τ ↑ ⊥
+--------------------- (XPath⊥)
+Γ, x: τ, Γ' ⊢ x.t ↑ ⊥
 ```
 
-## Stepping
+Otherwise, identity:
 
-Judgment form for single-step evaluation of types `gamma |-^{hand}_{this} tau => tau'`:  under environment gamma with self-object `this`, on hand side of subtyping (left or right), type `tau` evaluates to `tau'`.
+```
+--------- (X⊤)
+Γ ⊢ ⊤ r ↑ ⊤ r
+
+--------- (X⊥)
+Γ ⊢ ⊥ r ↑ ⊥ r
+
+--------- (XName)
+Γ ⊢ n r ↑ n r
+```
+
+Should be: `Γ ⊢ τ ↑ τ'` implies `Γ ⊢ τ <: τ'`.
+Exposure is terminating... or is it? Decidable Wyvern formulation is nicer, though the Γ-reduction here may be useful too
+
+## Upcast
+
+Upcast `Γ ⊢ τ ↑+ τ'`
+for paths, expose until we get a member we can look up, but unlike exposure, don't recursively expose the member's type
+```
+Γ           ⊢ τ   ↑ β { ...;type t <=/= τ';... }
+------------------------------------------------ (UCMember)
+Γ, x: τ, Γ' ⊢ x.t ↑+ τ'
+
+Γ           ⊢   τ ↑  ⊥
+---------------------- (UC⊥)
+Γ, x: τ, Γ' ⊢ x.t ↑+ ⊥
+
+                ...if no other rules apply
+--------------------- (UC⊤)
+Γ ⊢ x.t ↑+ ⊤
+```
+
+## Downcast
+
+Downcast `Γ ⊢ τ ↑- τ'`
+```
+Γ           ⊢ τ   ↑ β { ...;type t >=/= τ';... }
+------------------------------------------------ (DCMember)
+Γ, x: τ, Γ' ⊢ x.t ↑- τ'
+
+Γ           ⊢   τ ↑  ⊥
+---------------------- (DC⊤)
+Γ, x: τ, Γ' ⊢ x.t ↑- ⊤
+
+                ...if no other rules apply
+--------------------- (DC⊥)
+Γ ⊢ x.t ↑- ⊥
+```
+
+
+## Expansion
+
+Judgment form for single-step unfolding of types `Γ ⊢_{this} τ => τ'`:  under environment Γ with self-object `this`, type `τ` evaluates to `τ'`.
 Whenever we want to look inside a named definition `name n { x => ms }`, we need to know what to instantiate `this` as.
 ```
 
         name n { x => ms[x] }
   ------------------------------------- (StepName)
-  gamma |-^{hand}_{this} n {} => n ms[x := this]
-
-  ------------------------------------------------------ (StepSelect)
-  gamma, x: tau, gamma' |-^{hand}_{this} x.t {} => coerce tau(t) hand
-
-  gamma, y : tau |-^{hand}_y tau_y => tau_y'    gamma, y : tau_y', gamma' |-^{hand}_{this} tau => tau'
-  -------------------------------------------------------------------------------------- (StepEnv)
-  gamma, y : tau, gamma' |-^{hand}_{this} tau => tau'
-
-  gamma |-^{hand}_{this} beta   => beta' r'
-  ------------------------------------------------ (StepRefine)
-  gamma |-^{hand}_{this} beta r => beta' (r' ++ r)
+  Γ ⊢_{this} n r => n (ms[x := this] ++ r)
 ```
 
-If `gamma |-_x tau =>_{hand} tau'` and `gamma |- x: tau`, then `gamma |- x: tau'`???
+Expansion should really be equivalent, so `Γ ⊢ₓ τ => τ'` should imply `Γ ⊢ₓ τ <: τ' ∧ Γ ⊢ₓ τ' <: τ`
 
 # Subtyping
 
-Judgment form for type subtyping, `gamma |- tau <: tau'`, uses auxiliary judgment forms `gamma |-_{this} tau <: tau'` and `gamma |- r <: r'`.
+Judgment form for type subtyping, `Γ ⊢ τ <: τ'`, uses auxiliary judgment forms `Γ ⊢_{this} τ <: τ'` and `Γ ⊢ r <: r'`.
 
 The type subtyping judgment requires the self-object because the types in the named type definition may refer to their `this` object, but anonymous refinements do not.
 We want to be able to unfold named definitions `name n { this => d... }` into anonymous refinements `n { d... }`, which means that we need to be able to refer to `this` in the anonymous refinement.
-It's important to be able to unfold a named definition before changing the name to a supertype: for example, if there is a declared subtyping `ArrayList r <: List`
+It's important to be able to unfold a named definition before changing the name to a supertype: for example, if there is a declared subtyping `OrderedSet {} <: Set`
 ```
   name Set { this =>
-    type E   <= Top }
+    type E   <= ⊤ }
   name OrderedSet { this =>
-    type E   <= Top;
+    type E   <= ⊤;
     type Ord  <= Ord  { type E >= this.E };
     type Repr <= Tree { type E <= this.E } }
-  subtype OrderedSet <: Set
+  subtype OrderedSet {} <: Set
 ```
-We'd expect to be able to prove that `OrderedSet <: Set { type Repr <= Tree }`, which requires unfolding the named definition of OrderedSet to at least `OrderedSet { type Repr <= Tree { type E <= ????.E } }` before applying the explicit named supertype rule -- but we need to know how to refer to `this`.
+We'd expect to be able to prove that `OrderedSet {} <: Set { type Repr <= Tree }`, which requires unfolding the named definition of OrderedSet to at least `OrderedSet { type Repr <= Tree { type E <= ????.E } }` before applying the explicit named supertype rule -- but we need to know how to refer to `this`.
 
 This extra information isn't necessary in Decidable Wyvern's Wyv_core because all refinements have explicit self binders. It doesn't show up in the Nominal Wyvern thesis because types are only unfolded on paths `p.t`, which makes it quite weak. Nominal Wyvern can't show simple unfoldings such as `OrderedSet <: OrderedSet { type Repr <= Tree }`.
 
 ## Top-level type subtyping
 ```
-  gamma, x: tau |-_x tau <: tau'
+  Γ, x: τ ⊢ₓ τ <: τ'
   ------------------------------ (Sub)
-  gamma         |-   tau <: tau'
+  Γ       ⊢  τ <: τ'
 ```
 
 ## Core rules
 ```
-  ------------------- (SubTop)
-  gamma |-_x tau <: TOP
+  ------------------- (Sub⊤)
+  Γ ⊢ₓ τ <: ⊤
 
-  ------------------- (SubBot)
-  gamma |-_x BOT <: tau
+  ------------------- (Sub⊥)
+  Γ ⊢ₓ ⊥ <: τ
 
-  gamma |-     r <:   r'
+  Γ ⊢    r <:   r'
   -------------------- (SubNameRefine)
-  gamma |-_x n r <: n r'
+  Γ ⊢ₓ n r <: n r'
 
-  n r' <: n' \in S     gamma |- r <: r'     gamma |-_x n' r <: n'' r''
-  ---------------------------------------------------------------- (SubNameUp)
-  gamma |-_x n r <: n'' r''
+  n r' <: n' \in S     Γ ⊢ r <: r'     Γ ⊢ₓ n' r <: n'' r''
+  --------------------------------------------------------- (SubNameUp)
+  Γ ⊢ₓ n r <: n'' r''
 
-  gamma |-     r <:     r'
+  Γ ⊢ₐ     r <:     r'
   ------------------------ (SubVarRefine)
-  gamma |- x.t r <: x.t r'
+  Γ ⊢ₐ x.t r <: x.t r'
 ```
 
-## Non-deterministic stepping rules
+## Member lookup rules
 ```
-  gamma |-^{LHS}_x tau => tau'     gamma |-_x tau' <: tau''
-  ----------------------------------------------------- (SubStepLeft)
-  gamma |-_x tau <: tau''
+  Γ ⊢ x.t ↑+ τ     Γ ⊢ₐ τ <: τ'
+  ----------------------------------------------------- (SubMemberLower)
+  Γ ⊢ₐ x.t <: τ'
 
-  gamma |-^{RHS}_x tau' => tau''     gamma |-_x tau <: tau''
-  ----------------------------------------------------- (SubStepRight)
-  gamma |-_x tau <: tau'
+  Γ ⊢ x.t ↑- τ'     Γ ⊢ₐ τ <: τ'
+  ----------------------------------------------------- (SubMemberUpper)
+  Γ ⊢ₐ τ <: x.t
+```
+
+## Non-deterministic expansion rules
+```
+  Γ ⊢ₐ n r => n r'     Γ ⊢ₐ n r' <: τ''
+  ----------------------------------------------------- (SubExpandLower)
+  Γ ⊢ₐ n r <: τ''
+
+  Γ ⊢ₐ n r => n r'     Γ ⊢ₐ τ <: n r'
+  ----------------------------------------------------- (SubExpandUpper)
+  Γ ⊢ₐ τ <: n r
+
 ```
 
 ## Auxiliary rules
 ```
   -------------------- (SubRefNil)
-  gamma |-   [] <:   []
+  Γ ⊢   r <: []
 
-  type t = tau' \in r'     gamma, x: tau |-_x tau <:,:> tau'    gamma |- r <: r'
+  type t = τ ∈ r     Γ ⊢ τ <:,:> τ'    Γ ⊢ r <: r'
   ---------------------------------------------------------------- (SubRefConsEq)
-  gamma |- type t = tau, r  <: r'
+  Γ ⊢ r <: type t = τ', r'
 
-  type t <= tau' \in r'     gamma, x: tau |-_x tau <: tau'    gamma |- r <: r'
+  type t <= τ ∈ r     Γ ⊢ τ <: τ'    Γ ⊢ r <: r'
   ---------------------------------------------------------------- (SubRefConsLe)
-  gamma |- type t <= tau, r  <: r'
+  Γ ⊢ r  <: type t <= τ', r'
 
-  type t >= tau' \in r'     gamma, x: tau' |-_x tau' <: tau    gamma |- r <: r'
+  type t >= τ ∈ r     Γ ⊢ τ' <: τ    Γ ⊢ r <: r'
   ---------------------------------------------------------------- (SubRefConsGe)
-  gamma |- type t >= tau, r  <: r'
-
-  type t \not\in r'                                gamma |- r <: r'
-  ---------------------------------------------------------------- (SubRefConsMissing)
-  gamma |- type t ... , r  <: r'
+  Γ ⊢ r  <: type t >= τ', r'
 ```
 
