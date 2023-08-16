@@ -30,6 +30,24 @@ Subtyping declarations:
 
 # Helpers
 
+## Expansion
+
+Judgment form for single-step unfolding of types `Γ ⊢_{this} τ => τ'`:  under environment Γ with self-object `this`, type `τ` evaluates to `τ'`.
+Whenever we want to look inside a named definition `name n { x => ms }`, we need to know what to instantiate `this` as.
+```
+        name n { x => ms[x] }
+  ------------------------------------- (ExpandName)
+  Γ ⊢_{this} n r => n (ms[x := this] ++ r)
+```
+
+Expansion can do nothing:
+```
+  ------------------------------------- (ExpandId)
+  Γ ⊢_{this} τ => τ
+
+```
+Expansion should really be equivalent, so `Γ ⊢ₓ τ => τ'` should imply `Γ ⊢ₓ τ <: τ' ∧ Γ ⊢ₓ τ' <: τ`
+
 ## Exposure
 Nieto 2017
 
@@ -39,34 +57,23 @@ Exposure `Γ ⊢ τ ↑ τ'` (up-arrow should be fat-arrow).
 Interesting cases are paths:
 
 ```
-Γ           ⊢   τ ↑ β { ...;type t <=/= τ';... }      Γ ⊢   τ' ↑ τ''
------------------------------------------------------------------- (XPathRefine)
-Γ, x: τ, Γ' ⊢ x.t ↑ τ''
+x: τ ∈ Γ     Γ ⊢ τ ↑ τ'      Γ ⊢ₓ τ' => β { ...;type t <=/= τ'';... }     Γ ⊢ τ'' ↑ τ'''
+---------------------------------------------------------------------------------------- (XPathRefine)
+Γ ⊢ x.t ↑ τ''
 
-Γ           ⊢   τ ↑ x'.t' r          t ∉ r          Γ ⊢ x'.t' ↑ τ'    Γ, x: τ' ⊢ x.t ↑ τ''
-------------------------------------------------------------------------------- (XPathNotIn)
-Γ, x: τ, Γ' ⊢ x.t ↑ τ''
-
-Γ           ⊢   τ ↑ ⊥
+x: τ ∈ Γ  Γ ⊢   τ ↑ ⊥
 --------------------- (XPath⊥)
-Γ, x: τ, Γ' ⊢ x.t ↑ ⊥
+          Γ ⊢ x.t ↑ ⊥
 ```
 
 Otherwise, identity:
-
 ```
---------- (X⊤)
-Γ ⊢ ⊤ r ↑ ⊤ r
-
---------- (X⊥)
-Γ ⊢ ⊥ r ↑ ⊥ r
-
---------- (XName)
-Γ ⊢ n r ↑ n r
+τ not path
+---------- (XId)
+Γ ⊢ τ ↑ τ
 ```
 
-Should be: `Γ ⊢ τ ↑ τ'` implies `Γ ⊢ τ <: τ'`.
-Exposure is terminating... or is it? Decidable Wyvern formulation is nicer, though the Γ-reduction here may be useful too
+Exposure should satisfy `Γ ⊢ τ ↑ τ'` implies `Γ ⊢ τ <: τ'`.
 
 ## Upcast
 
@@ -84,6 +91,10 @@ for paths, expose until we get a member we can look up, but unlike exposure, don
                 ...if no other rules apply
 --------------------- (UC⊤)
 Γ ⊢ x.t ↑+ ⊤
+
+τ not path
+---------- (UCId)
+Γ ⊢ τ ↑+ τ
 ```
 
 ## Downcast
@@ -101,21 +112,12 @@ Downcast `Γ ⊢ τ ↑- τ'`
                 ...if no other rules apply
 --------------------- (DC⊥)
 Γ ⊢ x.t ↑- ⊥
+
+τ not path
+---------- (DCId)
+Γ ⊢ τ ↑- τ
 ```
 
-
-## Expansion
-
-Judgment form for single-step unfolding of types `Γ ⊢_{this} τ => τ'`:  under environment Γ with self-object `this`, type `τ` evaluates to `τ'`.
-Whenever we want to look inside a named definition `name n { x => ms }`, we need to know what to instantiate `this` as.
-```
-
-        name n { x => ms[x] }
-  ------------------------------------- (StepName)
-  Γ ⊢_{this} n r => n (ms[x := this] ++ r)
-```
-
-Expansion should really be equivalent, so `Γ ⊢ₓ τ => τ'` should imply `Γ ⊢ₓ τ <: τ' ∧ Γ ⊢ₓ τ' <: τ`
 
 # Subtyping
 
