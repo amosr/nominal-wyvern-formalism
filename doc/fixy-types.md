@@ -38,7 +38,7 @@ We can write:
 ```
 subtype Pair <: Semigroup
 ```
-The above doesn't exactly capture the meaning: the `Semigroup` supertype tells us that `Pair` has a join method, but it doesn't tell us that it can accept other pairs.
+But this doesn't capture the *whole* meaning: the `Semigroup` supertype tells us that `Pair` has a join method, but it doesn't tell us that it can accept other pairs.
 We could try to specify that it's a semigroup on pairs:
 ```
 subtype Pair <: Semigroup { type T = Pair }
@@ -46,58 +46,46 @@ subtype Pair <: Semigroup { type T = Pair }
 The above isn't grammatically valid in Nominal Wyvern though, and it's still missing a subtle piece of information: the pair we pass to the semigroup has to be the *same* pair.
 
 
-There's some missing context that we can't see just looking at the shape definition itself: these shapes all expect their type member to be instantiated with the type itself to "tie the recursive knot".
+There's some missing context that we can't see from looking at the shape definition in isolation: these shapes all expect their type member to be instantiated with the type itself to "tie the recursive knot".
 If we're designing a whole new programming language with shapes in mind, could we make it nicer to express such use-cases?
 
 * `ThisType` for Object-Oriented Languages: From Theory to Practice SUKYOUNG RYU, KAIST
 
+We could introduce special `self.TYPE` syntax for referring to ThisType inside shapes:
+
 ```
-name Cloneable { self =>
-  def clone(): type[self]
+shape Cloneable { self =>
+  def clone(): self.TYPE
 }
 
-name Equatable { self =>
-  def equals(that: type[self]): Bool
+shape Equatable { self =>
+  def equals(that: self.TYPE): Bool
 }
 
-name Semigroup { self =>
-  def join(that: type[self]): type[self]
-}
-
-name Pair { self =>
-  type A <= Semigroup
-  type B <= Semigroup
-  def join(that: type[self]): type[self]
+shape Semigroup { self =>
+  def join(that: self.TYPE): self.TYPE
 }
 ```
 
-If we only allow this special `type[p]` path types in method and field declarations, then we can ban cycles altogether.
-Does this simplify the metatheory and decidability?
+To clean up the explicit recursion during type member definitions `type A <= Semigroup { TYPE = self.A }`, we also define a special syntax for shape type-members.
+A shape type-member `shape type A <= Semigroup` has the semantics `type A <= Semigroup { TYPE = self.A }`.
+It's nice syntactic sugar, but more importantly, it ensures that recursion can only happen in certain specific decidable cases with only a local rule.
 
-No: this doesn't work because `Semigroup` is invariant. We can't take a `adder: PlusInt` and cast it to a `Semigroup` and then call join with other semigroups.
-Ie, if `adder: Semigroup` and we try to call `adder.join`, the `type[adder]` should not reduce to `Semigroup`.
-
-What if we had a `fix` combinator for types?
-We could define the shapes as before and write `fix[T] Semigroup` as shorthand for `µ t. Semigroup { type T = t }`.
-Then we could implement Pair-semigroup as:
 ```
 name Pair { self =>
-  type A <= fix Semigroup
-  type B <= fix Semigroup
-  type T  = Pair { A = self.A; B = self.B }
-  def join(that: Pair { self.A; self.B }): Pair { self.A; self.B }
+  shape type A <= Semigroup
+  shape type B <= Semigroup
+  def join(that: self.TYPE): self.TYPE
 }
 ```
-Which is slightly cleaner than the Nominal Wyvern definition.
-We need to be able to write fix on the right-hand-side of declared subtyping relations too:
 
-```
-subtype Pair <: fix Semigroup
-```
+We can now ban cycles in the subtyping dependency graph altogether.
+We also need to ban self.TYPE from occurring in type members, eg `type DUP = Pair { A = self.TYPE; B = self.TYPE }` is not allowed, because the pseudo-member `TYPE` depends on `DUP`.
+
 
 We can also describe conditionally-cloneable sets now, too:
 ```
-subtype Set { type Elem <= fix Cloneable } <: fix Cloneable
+subtype Set { shape type Elem <= Cloneable } <: Cloneable
 ```
 
 (Although, we still don't have a way to conditionally add the implementation of Cloneable.)
@@ -105,18 +93,10 @@ subtype Set { type Elem <= fix Cloneable } <: fix Cloneable
 ## Examples
 
 Side question: how to express monoid typeclass, which has a zero-element, with a shape-style interface?
-Dictionary-style with type members still works:
+We can implement a Dictionary with a type member and methods for the non-member operations:
 ```
 name MonoidDict { self =>
-  type A
-  def zero(): A
-  def join(this: A, that: A): A
-}
-```
-Or maybe:
-```
-name MonoidDict { self =>
-  type A <= Semigroup
+  shape type A <= Semigroup
   def zero(): A
 }
 ```
@@ -125,26 +105,29 @@ How do you express collections of semigroups?
 In Nominal Wyvern we need a top-level member, something like:
 ```
 name Set { self =>
-  type T
-  def index(i: Int): Option { T = self.T }
+  type ElemT
+  def index(i: Int): Option { T = self.ElemT }
 }
 
 name Collector { self =>
-  type T <= Semigroup { type T = self.T }
-  def collect(s: Set { type T = self.T }):
+  type T <= Semigroup { type TYPE = self.T }
+  def collect(s: Set { type ElemT = self.T }):
     self.T
 }
 ```
 
-With explicit fixpoints we can write it as a path-dependent method:
+With the `shape type` syntax in refinements we can write it as a path-dependent method:
 ```
-  def collect(s: Set { type T = fix Semigroup }):
+  def collect(s: Set { shape type T <= Semigroup }):
     s.T
 ```
 
-Decidable Wyvern could also express it as a path-dependent method:
+The `shape type` here is important, because it makes sure s.T is the actual result of the semigroup operation.
+Without it, the result of joining the semigroups together would be the `Semigroup::TYPE` of some value nested inside the set.
+
+Decidable Wyvern could also express it as a path-dependent method using recursive refinements:
 ```
-  def collect(s: Set { set => type T = Semigroup { type T = set.T } }):
+  def collect(s: Set { set => type T = Semigroup { type TYPE = set.T } }):
     s.T
 ```
 
@@ -168,13 +151,13 @@ Types:
 ```
   β      := `⊤` | `⊥` | n |  x.t
             (base types)
-  τ      := β r | `fix`[t] n
-            (refined and fixed types: for now, limit fixpoints to names without refinements)
+  τ      := β r
+            (refined types)
 ```
 
 Type members:
 ```
-  member := `type` t B τ
+  member := `shape`? `type` t B τ
 ```
 
 Anonymous refinements:
@@ -185,14 +168,13 @@ Anonymous refinements:
 Type declarations:
 ```
   method := `def` m(x: τ): τ' = e
-  D0     := `name` n { x => member... method... }
+  D0     := (`name` | `shape`) n { x => member... method... }
   D      := D0...
 ```
 
 Subtyping declarations:
 ```
-  S      := `subtype` n r <: n_fix
-  n_fix  := n | `fix`[t] n
+  S      := `subtype` n r <: n
 ```
 
 Terms
@@ -203,24 +185,46 @@ Terms
 
 # Helpers
 
+## Member lookup
+Judgment form
+```
+Γ ⊢ member ∈ₓ n
+```
+
+```
+x: τ ∈ Γ
+----------------------- (MemTypeTYPE)
+Γ ⊢ type TYPE <= τ ∈ₓ n
+```
+
+```
+Δ(n) = { x => ...type t B τ... }
+-------------------------------- (MemType)
+Γ ⊢ type t B τ ∈ₓ n
+```
+
+```
+Δ(n) = { x => ...shape type t B τ... }
+-------------------------------- (MemShape)
+Γ ⊢ type t B τ { type TYPE = x.t } ∈ₓ n
+```
+
+
 ## Exposure
-Exposure just leaves fixpoints alone.
-It's tempting to unfold the fixpoint once, eg `fix[t] n ↑ n { type t = fix[t] n }`, but this could lose some information about the identity of the fixpoint.
-Because there are many potential implementations of fixpoints, if we have two semigroups in scope `x, y: fix Semigroup` then we don't know that `x.t = y.t`.
-So, unfolding `x: fix Semigroup` to `Semigroup { type t = fix Semigroup }` might lose the fact that `x.t` should be the exact same semigroup as `x`.
-
-
 Paths:
 ```
 x: τ ∈ Γ     Γ ⊢ τ ↑ β { ...;type t LEQ τ';... }     Γ ⊢ τ' ↑ τ''
 ----------------------------------------------------------------- (XPathRefine)
 Γ ⊢ x.t ↑ τ''
 
-x: τ ∈ Γ     Γ ⊢ τ ↑ n r   t ∉ r    type t LEQ τ' ∈ Δ(n)[this := x]       Γ ⊢ τ'  ↑ τ''
---------------------------------------------------------------------------------------- (XPathDef)
+x: τ ∈ Γ     Γ ⊢ τ ↑ β { ...;shape type t LEQ τ';... }     Γ ⊢ τ' ↑ τ''
+----------------------------------------------------------------- (XPathRefineShape)
+Γ ⊢ x.t ↑ τ'' { type TYPE = x.t }
+
+x: τ ∈ Γ     Γ ⊢ τ ↑ n r   t ∉ r    type t LEQ τ' ∈ₓ Δ(n)       Γ ⊢ τ'  ↑ τ''
+----------------------------------------------------------------------------- (XPathDef)
 Γ ⊢ x.t ↑ τ''
 ```
-
 
 Do we need this rule:?
 If the type of `x` exposes to bottom, it basically means the environment is garbage (falso), and we can type (prove) anything.
@@ -253,8 +257,12 @@ x: τ ∈ Γ     Γ ⊢ τ ↑ β { ...;type t GEQ τ';... }
 ------------------------------------------------ (DCMember)
 Γ ⊢ x.t ↑- τ'
 
-x: τ ∈ Γ     Γ ⊢ τ ↑ n r     t ∉ r     type t GEQ τ' ∈ Δ(n)[this := x]
----------------------------------------------------------------------- (DCDef)
+x: τ ∈ Γ     Γ ⊢ τ ↑ β { ...;shape type t GEQ τ';... }
+------------------------------------------------ (DCMemberShape)
+Γ ⊢ x.t ↑- τ' { type TYPE = x.t }
+
+x: τ ∈ Γ     Γ ⊢ τ ↑ n r     t ∉ r     type t GEQ τ' ∈ₓ Δ(n)
+------------------------------------------------------------ (DCDef)
 Γ ⊢ x.t ↑- τ'
 ```
 
@@ -266,13 +274,6 @@ x: τ ∈ Γ     Γ ⊢ τ ↑  ⊥
 Γ ⊢ x.t ↑- ⊤
 ```
 
-
-Type of path looks like it should be easy, but it's not clear whether we should recursively downcast τ or expose it:
-```
-x: τ ∈ Γ   Γ ⊢ τ ↑- τ'
---------------------- (XTypePath)
-Γ ⊢ type[x] ↑- τ'
-```
 
 Hu & Lhotak (2020) has a failover case that goes to bottom, I don't think it's strictly necessary:
 ```
@@ -323,56 +324,6 @@ Judgment form for type subtyping, `Γ ⊢ τ <: τ'`, uses auxiliary judgment fo
 
 Should these rules allow refinements on the variable? Decidable Wyvern doesn't.
 
-## Fixpoint rules
-
-We treat each case `fix <: fix`, `n <: fix` and `fix <: n` as a separate rule.
-This lets us simplify the rules a bit.
-If we imagine that there is some denotational semantics of what subtyping should be, then our subtyping rules aim to be a sound under-approximation of this denotational semantics.
-It's OK if the rules disallow some subtyping relations that might hold on an ideal (but undecidable) system.
-
-To compare two fixpoints, the rule `Γ ⊢ fix[t] n <: fix[t] n'` just checks that the two underlying types are subtype-equivalent, ie `n <: n'` and `n' <: n`.
-We could probably get away with a rule that only allows reflexivity: `Γ ⊢ fix[t] n <: fix[t] n`.
-```
-  Γ ⊢        n <:, :> n'
-  ------------------------ (SubFixFix)
-  Γ ⊢ fix[t] n <: fix[t] n'
-```
-
-It might be able to express a more expressive rule that looks a bit like the following, but I'm not totally sure if it's legit:
-```
-  Γ ⊢ n { type t = n } <: n' { type t = n }
-  --------------------------------------------------- (SubFixFix*BAD)
-  Γ ⊢ fix[t] n <: fix[t] n'
-```
-
-The rule for a fixpoint on the right-hand-side has a few pieces to it.
-Conceptually, we want to unroll the fixpoint and check that the left-hand-side is a subtype of the right-hand-side:
-```
-  Γ ⊢ n r <: n' { type t = n r }
-  -------------------------------------------------------------------------- (SubFixUpper*BAD)
-  Γ ⊢ n r <: fix[t] n'
-```
-But the above isn't so easy to prove decidable because the type is not decreasing / structurally recursive.
-Can we break it apart into smaller pieces:?
-```
-  Γ         ⊢ n r <: n'
-  Γ         ⊢ type t B τ ∈ₓ n r
-  Γ, x: n r ⊢ type t B τ <: type t = n r
-  -------------------------------------------------------------------------------- (SubFixUpper)
-  Γ         ⊢ n r <: fix[t] n'
-```
-
-The rule for a fixpoint on the left-hand-side is similar: we want to unroll the fixpoint and check.
-```
-  Γ ⊢ n { type t <= n } <: n' r
-  ----------------------------------------------------- (SubFixLower*BAD)
-  Γ ⊢         fix[t] n <: n' r
-```
-
-We're implicitly applying transitivity here to simplify the rule and make it easier to check (but less complete).
-We can first unfold the fixpoint to `n { type t <= fix[t] n }`, then use the (unproven) fact that `fix[t] n <: n` to result in `n { type t <= n }`.
-
-
 ## Auxiliary rules
 ```
   -------------------- (SubRefNil)
@@ -402,80 +353,73 @@ No explicit variable reflexivity rule: this is subsumed by `SubRefine`, if we as
   Γ ⊢ x.t {} <: x.t {}
 ```
 
+# Top-level rules
+The top-level rules for `shape type` members need to unfold the recursion one step, but otherwise are pretty similar to the Nominal Wyvern rules.
 
 # Example typing derivations
 
 Given type definitions:
 ```
 shape Semigroup { self =>
-  type T <= Top
-  def join(that: self.T): self.T
+  def join(that: self.TYPE): self.TYPE
 }
 
 name PlusInt { self =>
-  type T = PlusInt
   def join(that: PlusInt): PlusInt
   val i: Int
 }
 
 name Pair { self =>
-  type A <= fix Semigroup
-  type B <= fix Semigroup
-  type T  = Pair { A = self.A; B = self.B }
+  shape type A <= Semigroup
+  shape type B <= Semigroup
   def join(that: Pair { self.A; self.B }): Pair { self.A; self.B }
   val a: self.A
   val b: self.B
 }
 ```
 
-To check declared subtyping relation: `subtype PlusInt <: fix Semigroup`
+To check declared subtyping relation: `subtype PlusInt <: Semigroup`
 ```
-Σ = PlusInt <: fix Semigroup
+Σ = PlusInt <: Semigroup
 
-Δ | Σ ⊢ PlusInt <: fix Semigroup
+Δ | Σ ⊢ PlusInt <: Semigroup
 ---> (top-level)
-x: PlusInt ⊢ { type T = PlusInt; def join(that: PlusInt): PlusInt; val i: Int } <: { type T <= fix Semigroup; def join(that: x.T): x.T }
+x: PlusInt ⊢ { def join(that: PlusInt): PlusInt; val i: Int } <: { def join(that: x.TYPE): x.TYPE }
 ---> (by σ)
-  type T = PlusInt <: type T <= fix Semigroup
-  ---> (by Σ).
-
-  def join(that: PlusInt): PlusInt <= def join(that: x.T): x.T
+  def join(that: PlusInt): PlusInt <= def join(that: x.TYPE): x.TYPE
   ---> (by method)
-    x: PlusInt                ⊢ PlusInt <: x.T
+    x: PlusInt                ⊢ PlusInt <: x.TYPE
     ---> (SubMemberUpper)
-      x: PlusInt              ⊢ PlusInt <: PlusInt
-      ---> (SubRefl).
+      stuck????
 
-    x: PlusInt, that: PlusInt ⊢ x.T <: PlusInt
+    x: PlusInt, that: PlusInt ⊢ x.TYPE <: PlusInt
     ---> (SubMemberLower)
       x: PlusInt, that: PlusInt ⊢ PlusInt <: PlusInt
       ---> (SubRefl).
 ```
 
-To check declared subtyping relation: `subtype Pair <: fix Semigroup`
-```
-Σ = Pair <: fix Semigroup
+We get stuck trying to show `x: PlusInt ⊢ PlusInt <: x.TYPE`. In fact, surprisingly (?) it's not even true in a system with subtyping-by-inheritance: if we defined a subtype of `PlusInt` called `PlusInt2` then the inherited method `PlusInt2::join(t: PlusInt): PlusInt` is not a valid `Semigroup::join`.
+The `ThisType` paper distinguishes between exact and inexact types.
+We can specify the exact type as roughly `PlusInt { type TYPE = PlusInt }` which says that the real runtime value is a `PlusInt`.
+With the exact type, we can prove `subtype PlusInt { type TYPE = PlusInt } <: Semigroup`
 
-Δ | Σ ⊢ Pair <: fix Semigroup
+
+
+
+
+To check declared subtyping relation: `subtype Pair <: Semigroup`
+```
+Σ = Pair <: Semigroup
+
+Δ | Σ ⊢ Pair <: Semigroup
 -->
 x: Pair ⊢ {
-  type A <= fix Semigroup;
-  type B <= fix Semigroup;
-  type T  = Pair { A = x.A; B = x.B };
+  type A <= Semigroup { type TYPE = x.A };
+  type B <= Semigroup { type TYPE = x.B };
   def join(that: Pair { x.A; x.B }): Pair { x.A; x.B };
   val a: x.A;
   val b: x.B;
 } <: {
-  type T <= fix Semigroup; def join(that: x.T): x.T
+  def join(that: x.TYPE): x.TYPE
 }
--->
-  x: Pair ⊢ type T = Pair { A = x.A; B = x.B } <: type T <= fix Semigroup
-  -->
-    x: Pair ⊢ Pair { A = x.A; B = x.B } <: fix Semigroup
-    -->
-      Σ ⊢ Pair <: fix Semigroup
-
-  x: Pair ⊢ def join(that: Pair { x.A; x.B }): Pair { x.A; x.B } <: def join(that: x.T): x.T
-  -->
-    etc
 ```
